@@ -4,6 +4,7 @@
 
 #include <QDialog>
 
+class QBoxLayout;
 class QButtonGroup;
 class QComboBox;
 class QLineEdit;
@@ -55,8 +56,12 @@ public:
     Flag flag() const;
     QString countryName() const;
 
+protected:
+    void resizeEvent(QResizeEvent *e) override;
+
 private:
     void setBrushColor(const QColor &c);
+    void updateDirection();
     void refreshControls();
     void refreshEmblemList();
     void onStripeCountChanged(int n);
@@ -65,6 +70,7 @@ private:
     void removeEmblem();
     int currentEmblem() const;
 
+    QBoxLayout *m_mainLayout;
     FlagCanvas *m_canvas;
     QLineEdit *m_name;
     QToolButton *m_currentColor;

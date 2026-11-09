@@ -2,6 +2,7 @@
 
 #include "world.h"
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QPolygonF>
 #include <QWidget>
@@ -31,6 +32,8 @@ public:
     // Call after the world changed from outside (undo, loading, renaming...).
     void worldChanged();
     void zoomToFit();
+    // When on, a bucket tap adds the area to the selected continent/country (like Shift+click).
+    void setAddMode(bool on) { m_addMode = on; }
 
     QImage exportImage() const;
 
@@ -44,6 +47,7 @@ signals:
     void hint(const QString &text);
 
 protected:
+    bool event(QEvent *e) override;
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *e) override;
     void mouseMoveEvent(QMouseEvent *e) override;
@@ -57,6 +61,11 @@ private:
     QTransform mapTransform() const;
     void rebuildImage();
     void paintWorld(QPainter &p, bool forExport) const;
+    void pointerDown(const QPointF &pos, bool alternate, bool addToSelection);
+    void pointerMove(const QPointF &pos);
+    void pointerUp(const QPointF &pos);
+    void cancelStroke();
+    void zoomAt(const QPointF &pos, double factor);
     void finishStroke(bool erase);
     void fillAt(const QPointF &mapPos, bool addToSelection);
 
@@ -79,6 +88,12 @@ private:
     QPolygonF m_stroke;
     bool m_panning = false;
     QPointF m_panStart;
-    QPointF m_cursorMap;
-    bool m_hasCursor = false;
+    bool m_addMode = false;
+
+    bool m_pinching = false;
+    double m_pinchStartScale = 1.0;
+    double m_pinchStartDist = 0.0;
+    QPointF m_pinchAnchor;
+    QElapsedTimer m_lastTap;
+    QPointF m_lastTapPos;
 };

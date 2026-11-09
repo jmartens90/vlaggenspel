@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(Vlaggenspel VERSION 0.1 LANGUAGES CXX)
+project(Vlaggenspel VERSION 0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,3 +23,10 @@ set_target_properties(vlaggenspel PROPERTIES
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
 )
+
+if(ANDROID)
+    set_target_properties(vlaggenspel PROPERTIES
+        QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}"
+        QT_ANDROID_VERSION_CODE 2
+    )
+endif()

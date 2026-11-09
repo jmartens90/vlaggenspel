@@ -23,10 +23,31 @@
 #include <QStatusBar>
 #include <QToolBar>
 #include <QToolButton>
+#include <QDir>
+#include <QGuiApplication>
+#include <QInputDialog>
+#include <QMenu>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 namespace {
 constexpr int kMaxUndo = 40;
+
+// Phone/tablet layout. Set VLAGGENSPEL_TOUCH=1 to try it on a computer.
+#ifdef Q_OS_ANDROID
+const bool kTouchDevice = true;
+#else
+const bool kTouchDevice = qEnvironmentVariableIsSet("VLAGGENSPEL_TOUCH");
+#endif
+
+// Phones and tablets have no file dialogs that suit us: worlds are kept in the app's own folder.
+QString worldsDir()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/worlds";
+    QDir().mkpath(dir);
+    return dir;
+}
 
 QIcon swatch(const QColor &c, int w = 20, int h = 20)
 {
@@ -91,14 +112,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_view = new MapView;
     setCentralWidget(m_view);
 
+    m_hint = new QLabel;
+    m_hint->setWordWrap(true);
+    statusBar()->addWidget(m_hint, 1);
+
     buildMenus();
     buildToolBar();
     buildStageBar();
     buildSidePanel();
 
-    m_hint = new QLabel;
-    m_hint->setWordWrap(true);
-    statusBar()->addWidget(m_hint, 1);
+    if (kTouchDevice)
+        menuBar()->hide(); // the ☰ button in the step bar has the same items
 
     connect(m_view, &MapView::hint, m_hint, &QLabel::setText);
     connect(m_view, &MapView::aboutToEdit, this, &MainWindow::saveUndo);
@@ -111,6 +135,17 @@ MainWindow::MainWindow(QWidget *parent)
     setStage(MapView::LandStage);
     refreshTitle();
     resize(1400, 900);
+
+    if (kTouchDevice) {
+        // Android can stop the app at any moment once it is in the background: save then.
+        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState st) {
+            if (st != Qt::ApplicationActive)
+                autoSave();
+        });
+        const QString last = QSettings().value("lastWorld").toString();
+        if (!last.isEmpty() && QFile::exists(last))
+            loadFile(last);
+    }
 }
 
 // ---- Building the window ------------------------------------------------------
@@ -118,6 +153,7 @@ MainWindow::MainWindow(QWidget *parent)
 void MainWindow::buildMenus()
 {
     QMenu *file = menuBar()->addMenu(tr("&File"));
+    m_fileMenu = file;
     file->addAction(tr("&New world"), QKeySequence::New, this, &MainWindow::newWorld);
     file->addAction(tr("&Open…"), QKeySequence::Open, this, &MainWindow::openWorld);
     file->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::saveWorld);
@@ -138,6 +174,7 @@ void MainWindow::buildMenus()
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
     help->addAction(tr("&How to play"), QKeySequence::HelpContents, this, &MainWindow::showHelp);
+    m_helpAct = help->actions().last();
 }
 
 void MainWindow::buildStageBar()
@@ -146,26 +183,40 @@ void MainWindow::buildStageBar()
     bar->setMovable(false);
     bar->setObjectName("steps");
     m_stageButtons = new QButtonGroup(this);
-    const QStringList names { tr("1  Draw the land"), tr("2  Make continents"),
-                              tr("3  Make countries"), tr("4  Names && flags") };
+    if (kTouchDevice) {
+        auto *menuButton = new QToolButton;
+        menuButton->setText("☰");
+        menuButton->setMinimumSize(44, 40);
+        auto *menu = new QMenu(menuButton);
+        menu->addActions(m_fileMenu->actions());
+        menu->addSeparator();
+        menu->addAction(m_helpAct);
+        menuButton->setMenu(menu);
+        menuButton->setPopupMode(QToolButton::InstantPopup);
+        bar->addWidget(menuButton);
+    }
+    const QStringList names = kTouchDevice
+        ? QStringList { tr("1 Land"), tr("2 Continents"), tr("3 Countries"), tr("4 Flags") }
+        : QStringList { tr("1  Draw the land"), tr("2  Make continents"),
+                        tr("3  Make countries"), tr("4  Names && flags") };
     for (int i = 0; i < names.size(); ++i) {
         auto *b = new QPushButton(names[i]);
         b->setCheckable(true);
-        b->setMinimumHeight(34);
+        b->setMinimumHeight(kTouchDevice ? 40 : 34);
         b->setStyleSheet("QPushButton { padding: 4px 14px; font-weight: bold; }"
                          "QPushButton:checked { background: #2e86ab; color: white; border-radius: 4px; }");
         m_stageButtons->addButton(b, i);
         bar->addWidget(b);
         if (i + 1 < names.size()) {
-            auto *arrow = new QLabel("  ›  ");
+            auto *arrow = new QLabel(kTouchDevice ? "›" : "  ›  ");
             bar->addWidget(arrow);
         }
     }
     auto *spacer = new QWidget;
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     bar->addWidget(spacer);
-    m_nextButton = new QPushButton(tr("Next step  →"));
-    m_nextButton->setMinimumHeight(34);
+    m_nextButton = new QPushButton(kTouchDevice ? tr("Next →") : tr("Next step  →"));
+    m_nextButton->setMinimumHeight(kTouchDevice ? 40 : 34);
     bar->addWidget(m_nextButton);
     connect(m_nextButton, &QPushButton::clicked, this, [this] {
         setStage(MapView::Stage(qMin(int(MapView::FlagStage), int(m_view->stage()) + 1)));
@@ -185,7 +236,7 @@ void MainWindow::buildToolBar()
     m_tools->setObjectName("tools");
     m_tools->setMovable(false);
     m_tools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_tools->setIconSize(QSize(24, 24));
+    m_tools->setIconSize(kTouchDevice ? QSize(32, 32) : QSize(24, 24));
     m_toolGroup = new QActionGroup(this);
 
     auto make = [this](const QString &icon, const QString &text, MapView::Tool tool, const QKeySequence &key) {
@@ -203,8 +254,19 @@ void MainWindow::buildToolBar()
     m_eraseBorder = make("noborder", tr("Remove border"), MapView::EraseBorder, QKeySequence(Qt::Key_R));
     m_fill = make("fill", tr("Fill area"), MapView::Fill, QKeySequence(Qt::Key_F));
     m_pick = make("pick", tr("Choose country"), MapView::Pick, QKeySequence(Qt::Key_C));
+    m_addMode = m_tools->addAction(tr("➕ Add to chosen"));
+    m_addMode->setCheckable(true);
+    m_addMode->setToolTip(tr("When on, tapping an area with the bucket adds it to the chosen continent or country "
+                             "(same as Shift+click)."));
+    connect(m_addMode, &QAction::toggled, this, [this](bool on) {
+        m_view->setAddMode(on);
+        if (on && !m_fill->isChecked()) {
+            m_fill->setChecked(true);
+            m_view->setTool(MapView::Fill);
+        }
+    });
     m_tools->addSeparator();
-    m_tools->addAction(tr("Undo"), this, &MainWindow::undo);
+    m_tools->addAction(tr("↶ Undo"), this, &MainWindow::undo);
     m_tools->addAction(tr("Whole map"), m_view, &MapView::zoomToFit);
     addToolBar(Qt::TopToolBarArea, m_tools);
 }
@@ -212,6 +274,7 @@ void MainWindow::buildToolBar()
 void MainWindow::buildSidePanel()
 {
     auto *dock = new QDockWidget(tr("Your world"));
+    m_dock = dock;
     dock->setObjectName("panel");
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
     auto *w = new QWidget;
@@ -263,8 +326,16 @@ void MainWindow::buildSidePanel()
     lay->addStretch(0); // takes the free space when the list is hidden
 
     dock->setWidget(w);
-    dock->setMinimumWidth(280);
+    dock->setMinimumWidth(kTouchDevice ? 220 : 280);
     addDockWidget(Qt::RightDockWidgetArea, dock);
+    QAction *panel = dock->toggleViewAction();
+    panel->setText(tr("☰ List"));
+    m_tools->addAction(panel);
+    if (kTouchDevice) {
+        dock->setFeatures(QDockWidget::DockWidgetClosable);
+        m_hint->hide();
+        statusBar()->hide(); // the panel explains each step; save the screen space
+    }
 
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
         if (m_refreshing || row < 0)
@@ -299,6 +370,8 @@ void MainWindow::setStage(MapView::Stage stage)
     m_eraseBorder->setVisible(divide);
     m_fill->setVisible(divide);
     m_pick->setVisible(stage == MapView::FlagStage);
+    m_addMode->setVisible(divide);
+    m_addMode->setChecked(false);
     (land ? m_drawLand : divide ? m_drawBorder : m_pick)->setChecked(true);
 
     refreshSidePanel();
@@ -333,20 +406,21 @@ void MainWindow::refreshSidePanel()
     case MapView::ContinentStage:
         m_panelTitle->setText(tr("Continents"));
         m_panelHelp->setText(tr("1. Draw border lines to cut the land into pieces.\n"
-                                "2. Use the bucket to click each piece: it becomes a continent.\n"
-                                "Shift+click adds an island to the selected continent."));
+                                "2. Use the bucket to tap each piece: it becomes a continent.\n"
+                                "To add an island to a continent: choose the continent, switch on "
+                                "\"Add to chosen\" and tap the island."));
         m_newButton->setText(tr("+ Empty continent"));
         break;
     case MapView::CountryStage:
         m_panelTitle->setText(tr("Countries"));
-        m_panelHelp->setText(tr("Draw borders inside the continents, then click each piece with the bucket "
+        m_panelHelp->setText(tr("Draw borders inside the continents, then tap each piece with the bucket "
                                 "to make a country. Every new country gets a surprise flag!"));
         m_newButton->setText(tr("+ Empty country"));
         break;
     case MapView::FlagStage:
         m_panelTitle->setText(tr("Names & flags"));
-        m_panelHelp->setText(tr("Click a country on the map or in the list, give it a name and design its flag. "
-                                "Double-click opens the flag designer."));
+        m_panelHelp->setText(tr("Tap a country on the map or in the list, give it a name and design its flag. "
+                                "Double-tap opens the flag designer."));
         break;
     }
     m_list->setVisible(s != MapView::LandStage);
@@ -517,7 +591,7 @@ void MainWindow::newEntity()
     }
     m_view->setTool(MapView::Fill);
     m_fill->setChecked(true);
-    m_hint->setText(tr("Now Shift+click areas on the map to add them to it."));
+    m_addMode->setChecked(true);
     refreshSidePanel();
     markEdited();
 }
@@ -529,6 +603,8 @@ void MainWindow::designFlag(int countryId)
         return;
     m_view->setSelectedCountry(countryId);
     FlagEditor dlg(c->name, c->flag, this);
+    if (kTouchDevice)
+        dlg.setWindowState(Qt::WindowMaximized);
     if (dlg.exec() != QDialog::Accepted)
         return;
     saveUndo();
@@ -628,21 +704,41 @@ void MainWindow::openWorld()
 {
     if (!maybeSave())
         return;
-    const QString path = QFileDialog::getOpenFileName(this, tr("Open world"), QString(),
-                                                      tr("Vlaggenspel worlds (*.vlag);;All files (*)"));
-    if (path.isEmpty())
-        return;
+    QString path;
+    if (kTouchDevice) {
+        QStringList names;
+        for (const QFileInfo &fi : QDir(worldsDir()).entryInfoList({ "*.vlag" }, QDir::Files, QDir::Time))
+            names << fi.completeBaseName();
+        if (names.isEmpty()) {
+            QMessageBox::information(this, tr("Open world"), tr("You have not saved any worlds yet."));
+            return;
+        }
+        bool ok = false;
+        const QString name = QInputDialog::getItem(this, tr("Open world"), tr("Which world?"), names, 0, false, &ok);
+        if (!ok)
+            return;
+        path = worldsDir() + "/" + name + ".vlag";
+    } else {
+        path = QFileDialog::getOpenFileName(this, tr("Open world"), QString(),
+                                            tr("Vlaggenspel worlds (*.vlag);;All files (*)"));
+    }
+    if (!path.isEmpty())
+        loadFile(path);
+}
+
+bool MainWindow::loadFile(const QString &path)
+{
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
         QMessageBox::warning(this, tr("Open world"), tr("Could not open %1.").arg(path));
-        return;
+        return false;
     }
     QString error;
     World w;
     const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     if (!World::fromJson(doc.object(), w, &error)) {
         QMessageBox::warning(this, tr("Open world"), error);
-        return;
+        return false;
     }
     m_world = w;
     m_undo.clear();
@@ -657,6 +753,7 @@ void MainWindow::openWorld()
     m_view->worldChanged();
     m_view->zoomToFit();
     refreshTitle();
+    return true;
 }
 
 bool MainWindow::saveWorld()
@@ -668,12 +765,23 @@ bool MainWindow::saveWorld()
 
 bool MainWindow::saveWorldAs()
 {
-    QString path = QFileDialog::getSaveFileName(this, tr("Save world"), tr("My world.vlag"),
-                                                tr("Vlaggenspel worlds (*.vlag)"));
-    if (path.isEmpty())
-        return false;
-    if (!path.endsWith(".vlag", Qt::CaseInsensitive))
-        path += ".vlag";
+    QString path;
+    if (kTouchDevice) {
+        bool ok = false;
+        QString name = QInputDialog::getText(this, tr("Save world"), tr("Name of your world:"), QLineEdit::Normal,
+                                             m_filePath.isEmpty() ? tr("My world") : QFileInfo(m_filePath).completeBaseName(), &ok);
+        name = name.trimmed().replace('/', '-');
+        if (!ok || name.isEmpty())
+            return false;
+        path = worldsDir() + "/" + name + ".vlag";
+    } else {
+        path = QFileDialog::getSaveFileName(this, tr("Save world"), tr("My world.vlag"),
+                                            tr("Vlaggenspel worlds (*.vlag)"));
+        if (path.isEmpty())
+            return false;
+        if (!path.endsWith(".vlag", Qt::CaseInsensitive))
+            path += ".vlag";
+    }
     return writeFile(path);
 }
 
@@ -687,20 +795,39 @@ bool MainWindow::writeFile(const QString &path)
     f.write(QJsonDocument(m_world.toJson()).toJson(QJsonDocument::Compact));
     m_filePath = path;
     m_modified = false;
+    QSettings().setValue("lastWorld", path);
     refreshTitle();
     statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(path).fileName()), 3000);
     return true;
 }
 
+// On phones there is no "Save?" question when the app closes: the world is simply kept.
+void MainWindow::autoSave()
+{
+    if (!m_modified)
+        return;
+    writeFile(m_filePath.isEmpty() ? worldsDir() + "/" + tr("My world") + ".vlag" : m_filePath);
+}
+
 void MainWindow::exportPng()
 {
-    QString path = QFileDialog::getSaveFileName(this, tr("Export map"), tr("My world.png"), tr("PNG pictures (*.png)"));
-    if (path.isEmpty())
-        return;
-    if (!path.endsWith(".png", Qt::CaseInsensitive))
-        path += ".png";
+    QString path;
+    if (kTouchDevice) {
+        QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        QDir().mkpath(dir);
+        const QString name = m_filePath.isEmpty() ? tr("My world") : QFileInfo(m_filePath).completeBaseName();
+        path = dir + "/" + name + ".png";
+    } else {
+        path = QFileDialog::getSaveFileName(this, tr("Export map"), tr("My world.png"), tr("PNG pictures (*.png)"));
+        if (path.isEmpty())
+            return;
+        if (!path.endsWith(".png", Qt::CaseInsensitive))
+            path += ".png";
+    }
     if (!m_view->exportImage().save(path))
         QMessageBox::warning(this, tr("Export map"), tr("Could not write %1.").arg(path));
+    else if (kTouchDevice)
+        QMessageBox::information(this, tr("Export map"), tr("The map was saved as:\n%1").arg(path));
 }
 
 void MainWindow::showHelp()
@@ -720,8 +847,24 @@ void MainWindow::showHelp()
            "Ctrl+Z undoes a mistake.</p>"));
 }
 
+void MainWindow::resizeEvent(QResizeEvent *e)
+{
+    QMainWindow::resizeEvent(e);
+    // Phone held upright: put the list under the map instead of next to it.
+    if (kTouchDevice && m_dock) {
+        const Qt::DockWidgetArea want = height() > width() ? Qt::BottomDockWidgetArea : Qt::RightDockWidgetArea;
+        if (dockWidgetArea(m_dock) != want)
+            addDockWidget(want, m_dock);
+    }
+}
+
 void MainWindow::closeEvent(QCloseEvent *e)
 {
+    if (kTouchDevice) {
+        autoSave();
+        e->accept();
+        return;
+    }
     if (maybeSave())
         e->accept();
     else

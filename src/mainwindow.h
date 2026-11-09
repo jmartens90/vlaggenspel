@@ -8,6 +8,8 @@
 class QAction;
 class QActionGroup;
 class QButtonGroup;
+class QDockWidget;
+class QMenu;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -24,6 +26,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *e) override;
+    void resizeEvent(QResizeEvent *e) override;
 
 private:
     void buildMenus();
@@ -47,6 +50,8 @@ private:
     bool saveWorld();
     bool saveWorldAs();
     bool writeFile(const QString &path);
+    bool loadFile(const QString &path);
+    void autoSave();
     void exportPng();
     bool maybeSave();
     void showHelp();
@@ -72,6 +77,10 @@ private:
     QActionGroup *m_toolGroup;
     QAction *m_drawLand, *m_eraseLand, *m_drawBorder, *m_eraseBorder, *m_fill, *m_pick;
     QAction *m_undoAct, *m_redoAct;
+    QAction *m_addMode = nullptr;
+    QAction *m_helpAct = nullptr;
+    QMenu *m_fileMenu = nullptr;
+    QDockWidget *m_dock = nullptr;
 
     QLabel *m_panelTitle;
     QLabel *m_panelHelp;

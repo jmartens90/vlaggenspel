@@ -1,6 +1,8 @@
 #include "mapview.h"
 
+#include <QLineF>
 #include <QMouseEvent>
+#include <QTouchEvent>
 #include <QPainter>
 #include <QWheelEvent>
 #include <QtMath>
@@ -20,6 +22,7 @@ MapView::MapView(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(400, 300);
     setCursor(Qt::CrossCursor);
+    setAttribute(Qt::WA_AcceptTouchEvents);
 }
 
 void MapView::setWorld(World *world)
@@ -46,8 +49,8 @@ void MapView::setTool(Tool tool)
     QString text;
     switch (tool) {
     case DrawLand:
-        text = tr("Draw the outline of an island or continent with the left mouse button. "
-                  "Release to close the shape. Right mouse button erases. Scroll to zoom, middle button to move.");
+        text = tr("Draw the outline of an island or continent. Let go to close the shape. "
+                  "Pinch or scroll to zoom; move the map with two fingers or the middle mouse button.");
         break;
     case EraseLand:
         text = tr("Draw around the part of the land you want to turn into sea.");
@@ -58,15 +61,15 @@ void MapView::setTool(Tool tool)
             : tr("Draw a line across a continent, from coast or border to the other side, to split it into countries. Then use the bucket.");
         break;
     case EraseBorder:
-        text = tr("Click on a border line to remove it.");
+        text = tr("Tap a border line to remove it.");
         break;
     case Fill:
         text = m_stage == ContinentStage
-            ? tr("Click on a piece of land to make it a new continent, or to select it. Shift+click adds the piece to the selected continent.")
-            : tr("Click inside a continent to make a new country, or to select it. Shift+click adds the piece to the selected country.");
+            ? tr("Tap a piece of land to make it a new continent, or to choose it. With \"Add to chosen\" on (or Shift+click) the piece joins the chosen continent.")
+            : tr("Tap inside a continent to make a new country, or to choose it. With \"Add to chosen\" on (or Shift+click) the piece joins the chosen country.");
         break;
     case Pick:
-        text = tr("Click a country to choose it. Double-click to design its flag.");
+        text = tr("Tap a country to choose it. Double-tap to design its flag.");
         break;
     }
     emit hint(text);
@@ -277,12 +280,86 @@ void MapView::paintEvent(QPaintEvent *)
     }
 }
 
-void MapView::mousePressEvent(QMouseEvent *e)
+// ---- Input ------------------------------------------------------------------
+// Mouse and touch both end up in pointerDown / pointerMove / pointerUp.
+
+void MapView::pointerDown(const QPointF &pos, bool alternate, bool addToSelection)
 {
     if (!m_world)
         return;
-    const QPointF mp = toMap(e->position());
+    const QPointF mp = toMap(pos);
 
+    switch (m_tool) {
+    case DrawLand:
+    case EraseLand:
+    case DrawBorder:
+        m_drawing = true;
+        m_eraseStroke = m_tool == EraseLand || alternate;
+        m_stroke = QPolygonF() << mp;
+        break;
+    case EraseBorder: {
+        World copy = *m_world;
+        // Generous hit area so a finger can hit a thin line.
+        if (copy.removeBorderNear(m_stage == ContinentStage ? 1 : 2, mp, 24.0 / m_scale + 4)) {
+            emit aboutToEdit();
+            *m_world = copy;
+            worldChanged();
+            emit edited();
+        }
+        break;
+    }
+    case Fill:
+        fillAt(mp, addToSelection || m_addMode);
+        break;
+    case Pick: {
+        const int id = m_world->countryAt(int(mp.x()), int(mp.y()));
+        setSelectedCountry(id);
+        emit countrySelected(id);
+        break;
+    }
+    }
+}
+
+void MapView::pointerMove(const QPointF &pos)
+{
+    if (!m_drawing)
+        return;
+    const QPointF mp = toMap(pos);
+    const QPointF d = mp - m_stroke.last();
+    if (d.x() * d.x() + d.y() * d.y() > 2.0)
+        m_stroke << mp;
+    update();
+}
+
+void MapView::pointerUp(const QPointF &pos)
+{
+    if (!m_drawing)
+        return;
+    m_stroke << toMap(pos);
+    m_drawing = false;
+    finishStroke(m_eraseStroke);
+    m_stroke.clear();
+    update();
+}
+
+void MapView::cancelStroke()
+{
+    m_drawing = false;
+    m_stroke.clear();
+    update();
+}
+
+void MapView::zoomAt(const QPointF &pos, double factor)
+{
+    const QPointF anchor = toMap(pos);
+    m_scale = qBound(0.05, m_scale * factor, 30.0);
+    m_offset = pos - anchor * m_scale;
+    m_fitted = false;
+    update();
+}
+
+void MapView::mousePressEvent(QMouseEvent *e)
+{
     const bool panButton = e->button() == Qt::MiddleButton
         || (e->button() == Qt::RightButton && m_stage != LandStage);
     if (panButton) {
@@ -291,40 +368,9 @@ void MapView::mousePressEvent(QMouseEvent *e)
         setCursor(Qt::ClosedHandCursor);
         return;
     }
-
-    switch (m_tool) {
-    case DrawLand:
-    case EraseLand:
-    case DrawBorder:
-        if (e->button() == Qt::LeftButton || e->button() == Qt::RightButton) {
-            m_drawing = true;
-            m_eraseStroke = m_tool == EraseLand || e->button() == Qt::RightButton;
-            m_stroke = QPolygonF() << mp;
-        }
-        break;
-    case EraseBorder:
-        if (e->button() == Qt::LeftButton) {
-            World copy = *m_world;
-            if (copy.removeBorderNear(m_stage == ContinentStage ? 1 : 2, mp, 12.0 / m_scale + 4)) {
-                emit aboutToEdit();
-                *m_world = copy;
-                worldChanged();
-                emit edited();
-            }
-        }
-        break;
-    case Fill:
-        if (e->button() == Qt::LeftButton)
-            fillAt(mp, e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier));
-        break;
-    case Pick:
-        if (e->button() == Qt::LeftButton) {
-            const int id = m_world->countryAt(int(mp.x()), int(mp.y()));
-            setSelectedCountry(id);
-            emit countrySelected(id);
-        }
-        break;
-    }
+    if (e->button() == Qt::LeftButton || (e->button() == Qt::RightButton && m_stage == LandStage))
+        pointerDown(e->position(), e->button() == Qt::RightButton,
+                    e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier));
 }
 
 void MapView::mouseMoveEvent(QMouseEvent *e)
@@ -336,13 +382,7 @@ void MapView::mouseMoveEvent(QMouseEvent *e)
         update();
         return;
     }
-    if (m_drawing) {
-        const QPointF mp = toMap(e->position());
-        const QPointF d = mp - m_stroke.last();
-        if (d.x() * d.x() + d.y() * d.y() > 2.0)
-            m_stroke << mp;
-        update();
-    }
+    pointerMove(e->position());
 }
 
 void MapView::mouseReleaseEvent(QMouseEvent *e)
@@ -352,13 +392,7 @@ void MapView::mouseReleaseEvent(QMouseEvent *e)
         setCursor(Qt::CrossCursor);
         return;
     }
-    if (m_drawing) {
-        m_stroke << toMap(e->position());
-        m_drawing = false;
-        finishStroke(m_eraseStroke);
-        m_stroke.clear();
-        update();
-    }
+    pointerUp(e->position());
 }
 
 void MapView::mouseDoubleClickEvent(QMouseEvent *e)
@@ -374,13 +408,76 @@ void MapView::mouseDoubleClickEvent(QMouseEvent *e)
 
 void MapView::wheelEvent(QWheelEvent *e)
 {
-    const double steps = e->angleDelta().y() / 120.0;
-    const double factor = std::pow(1.2, steps);
-    const QPointF anchor = toMap(e->position());
-    m_scale = qBound(0.05, m_scale * factor, 30.0);
-    m_offset = e->position() - anchor * m_scale;
-    m_fitted = false;
-    update();
+    zoomAt(e->position(), std::pow(1.2, e->angleDelta().y() / 120.0));
+}
+
+// One finger draws / taps. Two fingers pinch to zoom and drag to move the map.
+bool MapView::event(QEvent *e)
+{
+    switch (e->type()) {
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+    case QEvent::TouchEnd:
+    case QEvent::TouchCancel: {
+        auto *te = static_cast<QTouchEvent *>(e);
+        const auto &pts = te->points();
+        const bool last = e->type() == QEvent::TouchEnd || e->type() == QEvent::TouchCancel;
+
+        if (pts.size() >= 2 && !m_pinching) {
+            // A second finger arrived: whatever the first finger was drawing is cancelled.
+            cancelStroke();
+            m_pinching = true;
+            m_pinchStartScale = m_scale;
+            m_pinchStartDist = QLineF(pts[0].position(), pts[1].position()).length();
+            m_pinchAnchor = toMap((pts[0].position() + pts[1].position()) / 2);
+        }
+        if (m_pinching) {
+            if (pts.size() >= 2 && m_pinchStartDist > 1) {
+                const QPointF c = (pts[0].position() + pts[1].position()) / 2;
+                const double d = QLineF(pts[0].position(), pts[1].position()).length();
+                m_scale = qBound(0.05, m_pinchStartScale * d / m_pinchStartDist, 30.0);
+                m_offset = c - m_pinchAnchor * m_scale;
+                m_fitted = false;
+                update();
+            }
+            if (last)
+                m_pinching = false; // only after every finger is lifted
+            e->accept();
+            return true;
+        }
+
+        if (pts.isEmpty())
+            return true;
+        const QPointF pos = pts.first().position();
+        if (e->type() == QEvent::TouchBegin) {
+            pointerDown(pos, false, false);
+        } else if (e->type() == QEvent::TouchUpdate) {
+            pointerMove(pos);
+        } else if (e->type() == QEvent::TouchEnd) {
+            pointerUp(pos);
+            // Double tap on a country opens the flag designer.
+            if (m_tool == Pick) {
+                const bool dbl = m_lastTap.isValid() && m_lastTap.elapsed() < 450
+                    && QLineF(pos, m_lastTapPos).length() < 40;
+                if (dbl && m_world) {
+                    const QPointF mp = toMap(pos);
+                    if (const int id = m_world->countryAt(int(mp.x()), int(mp.y())))
+                        emit countryActivated(id);
+                    m_lastTap.invalidate();
+                } else {
+                    m_lastTap.start();
+                    m_lastTapPos = pos;
+                }
+            }
+        } else {
+            cancelStroke();
+        }
+        e->accept();
+        return true;
+    }
+    default:
+        return QWidget::event(e);
+    }
 }
 
 void MapView::finishStroke(bool erase)

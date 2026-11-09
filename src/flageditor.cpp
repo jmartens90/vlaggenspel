@@ -4,7 +4,10 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -163,13 +166,18 @@ FlagEditor::FlagEditor(const QString &countryName, const Flag &flag, QWidget *pa
     m_currentColor->setToolTip(tr("The colour you paint with"));
     paletteRow->addWidget(m_currentColor);
     paletteRow->addSpacing(8);
+    // Two rows of colours so the designer also fits on a phone held upright.
+    auto *grid = new QGridLayout;
+    grid->setSpacing(2);
+    int n = 0;
     for (const QColor &c : Flag::palette()) {
         auto *b = new QToolButton;
         b->setIcon(colorIcon(c));
         b->setIconSize(QSize(24, 24));
         b->setAutoRaise(true);
         connect(b, &QToolButton::clicked, this, [this, c] { setBrushColor(c); });
-        paletteRow->addWidget(b);
+        grid->addWidget(b, n / 6, n % 6);
+        ++n;
     }
     auto *more = new QToolButton;
     more->setText(tr("More…"));
@@ -178,6 +186,7 @@ FlagEditor::FlagEditor(const QString &countryName, const Flag &flag, QWidget *pa
         if (c.isValid())
             setBrushColor(c);
     });
+    paletteRow->addLayout(grid);
     paletteRow->addWidget(more);
     paletteRow->addStretch();
 
@@ -249,9 +258,10 @@ FlagEditor::FlagEditor(const QString &countryName, const Flag &flag, QWidget *pa
     right->addStretch();
     right->addWidget(buttons);
 
-    auto *main = new QHBoxLayout(this);
-    main->addLayout(left, 3);
-    main->addLayout(right, 2);
+    m_mainLayout = new QBoxLayout(QBoxLayout::LeftToRight, this);
+    m_mainLayout->addLayout(left, 3);
+    m_mainLayout->addLayout(right, 2);
+    updateDirection();
 
     // Wiring
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -293,6 +303,20 @@ FlagEditor::FlagEditor(const QString &countryName, const Flag &flag, QWidget *pa
     refreshEmblemList();
     refreshControls();
     resize(900, 520);
+}
+
+void FlagEditor::resizeEvent(QResizeEvent *e)
+{
+    QDialog::resizeEvent(e);
+    updateDirection();
+}
+
+// On a phone held upright, put the controls under the flag instead of next to it.
+void FlagEditor::updateDirection()
+{
+    const QScreen *scr = screen() ? screen() : QGuiApplication::primaryScreen();
+    const QRect r = scr ? scr->availableGeometry() : QRect(0, 0, 1024, 768);
+    m_mainLayout->setDirection(r.height() > r.width() ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
 }
 
 Flag FlagEditor::flag() const
