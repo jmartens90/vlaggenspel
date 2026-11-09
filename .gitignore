@@ -1,0 +1,6 @@
+build/
+build-*/
+*.user
+*.user.*
+CMakeLists.txt.user*
+.qtcreator/
