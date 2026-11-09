@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write  # needed to publish the APK as a release
+
 jobs:
   desktop:
     name: Desktop (Linux)
@@ -87,3 +90,18 @@ jobs:
         with:
           name: vlaggenspel-android
           path: vlaggenspel.apk
+
+      # A release gives a plain download link that works on a phone without logging in:
+      # https://github.com/jmartens90/vlaggenspel/releases/latest/download/vlaggenspel.apk
+      - name: Publish APK as the latest release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" vlaggenspel.apk \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Vlaggenspel (build ${{ github.run_number }})" \
+            --notes "Android app. On your phone, tap vlaggenspel.apk below to download it, then open it to install. Uninstall an older version first." \
+            --latest

@@ -70,12 +70,16 @@ Nothing else.
 
 ### Ready-made APK from GitHub
 
-Every push is built by GitHub Actions (`.github/workflows/build.yml`). Open
-the *Actions* tab, click the latest *Build* run and download
-**vlaggenspel-android** at the bottom. Unzip it, copy `vlaggenspel.apk` to the
-phone and open it (Android asks you to allow installing apps from that
-source). Each build is signed with a new throw-away key, so uninstall the old
-version before installing a newer one.
+On your phone, open
+**https://github.com/jmartens90/vlaggenspel/releases/latest/download/vlaggenspel.apk**
+and open the downloaded file to install it (Android asks you to allow
+installing apps from your browser once). The
+[Releases page](https://github.com/jmartens90/vlaggenspel/releases) lists all
+versions.
+
+Every push to `main` is built by GitHub Actions (`.github/workflows/build.yml`)
+and published as a new release. Each build is signed with a new throw-away key,
+so uninstall the old version before installing a newer one.
 
 ### Command line
 
