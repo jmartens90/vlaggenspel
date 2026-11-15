@@ -27,6 +27,7 @@ public:
 protected:
     void closeEvent(QCloseEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;
+    void keyPressEvent(QKeyEvent *e) override;
 
 private:
     void buildMenus();
@@ -49,9 +50,10 @@ private:
     void openWorld();
     bool saveWorld();
     bool saveWorldAs();
-    bool writeFile(const QString &path);
-    bool loadFile(const QString &path);
+    bool writeFile(const QString &path, bool silent = false);
+    bool loadFile(const QString &path, bool silent = false);
     void autoSave();
+    void repaintEverything();
     void exportPng();
     bool maybeSave();
     void showHelp();
