@@ -1,6 +1,7 @@
 #include "world.h"
 
 #include <QJsonArray>
+#include <QLineF>
 #include <QJsonObject>
 #include <QPainter>
 #include <QtMath>
@@ -78,21 +79,69 @@ QColor World::niceColor(int seed)
 
 // ---- Land -------------------------------------------------------------------
 
+// ---- Turning a hand-drawn line into a solid shape ------------------------------
+
+namespace {
+bool segmentsCross(const QPointF &a, const QPointF &b, const QPointF &c, const QPointF &d, QPointF *at)
+{
+    return QLineF(a, b).intersects(QLineF(c, d), at) == QLineF::BoundedIntersection;
+}
+} // namespace
+
+// When a drawing finger goes round and overshoots its starting point, the line crosses
+// itself near both ends. Cut off those loose ends so the shape is just the loop.
+QPolygonF World::trimOvershoot(const QPolygonF &stroke)
+{
+    const int n = stroke.size();
+    if (n < 8)
+        return stroke;
+    const int edge = qMax(3, n / 4); // only look at crossings between the first and last quarter
+    for (int i = 0; i < edge; ++i) {
+        for (int j = n - 2; j >= n - 1 - edge && j > i + 2; --j) {
+            QPointF hit;
+            if (segmentsCross(stroke[i], stroke[i + 1], stroke[j], stroke[j + 1], &hit)) {
+                QPolygonF loop;
+                loop << hit;
+                for (int k = i + 1; k <= j; ++k)
+                    loop << stroke[k];
+                return loop;
+            }
+        }
+    }
+    return stroke;
+}
+
+// The area inside a drawn line, closed back to its start, without any holes:
+// wherever the line crosses itself, the inside stays filled.
+QPainterPath World::solidShape(const QPolygonF &stroke)
+{
+    QPainterPath raw;
+    raw.setFillRule(Qt::WindingFill);
+    raw.addPolygon(trimOvershoot(stroke));
+    raw.closeSubpath();
+
+    // simplified() splits a self-crossing outline into plain outlines (outer edges and holes).
+    // Filling each of those on its own and adding them together closes every hole.
+    QPainterPath solid;
+    solid.setFillRule(Qt::WindingFill);
+    for (const QPolygonF &part : raw.simplified().toSubpathPolygons()) {
+        QPainterPath piece;
+        piece.addPolygon(part);
+        piece.closeSubpath();
+        solid = solid.united(piece);
+    }
+    return solid;
+}
+
 void World::addLand(const QPolygonF &outline)
 {
-    QPainterPath p;
-    p.addPolygon(outline);
-    p.closeSubpath();
-    m_land = m_land.united(p).simplified();
+    m_land = m_land.united(solidShape(outline)).simplified();
     rebuildLandMask();
 }
 
 void World::eraseLand(const QPolygonF &outline)
 {
-    QPainterPath p;
-    p.addPolygon(outline);
-    p.closeSubpath();
-    m_land = m_land.subtracted(p).simplified();
+    m_land = m_land.subtracted(solidShape(outline)).simplified();
     rebuildLandMask();
     dropLabelsOutsideLand();
 }
