@@ -3,7 +3,10 @@
 set -u
 APK="$1"; OUT="$2"
 mkdir -p "$OUT"
-shot() { adb exec-out screencap -p > "$OUT/$1.png"; echo "screenshot $1"; }
+shot() {
+  adb exec-out screencap -p > "$OUT/$1.png"
+  echo "screenshot $1 | running pid: $(adb shell pidof "$PKG" | tr -d '\r') | focus: $(adb shell dumpsys window | grep -m1 mCurrentFocus | tr -d '\r')"
+}
 launch() { adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1; }
 
 adb install -r "$APK"
@@ -54,4 +57,5 @@ launch; sleep 10; shot 08-after-back
 adb shell pidof "$PKG" > "$OUT/pid.txt" || echo "app not running" > "$OUT/pid.txt"
 adb logcat -d > "$OUT/logcat.txt"
 grep -iE "vlaggenspel|qt|FATAL|ANR|crash|AndroidRuntime" "$OUT/logcat.txt" | tail -300 > "$OUT/logcat-app.txt" || true
+grep -iE "AndroidRuntime|FATAL|ANR in|qt\\.|libvlaggenspel|org.qtproject" "$OUT/logcat.txt" | tail -80
 echo done
