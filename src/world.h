@@ -94,6 +94,8 @@ public:
     static bool fromJson(const QJsonObject &o, World &out, QString *error = nullptr);
 
     static QColor niceColor(int seed);
+    static QPolygonF trimOvershoot(const QPolygonF &stroke);
+    static QPainterPath solidShape(const QPolygonF &stroke);
 
 private:
     QVector<int> region(int level, int x, int y) const;

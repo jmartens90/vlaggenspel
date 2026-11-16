@@ -1,0 +1,88 @@
+name: Android emulator test
+
+# Installs the app on an Android emulator, draws on it with fake touches, sends it to the
+# background and back, restarts it, and saves screenshots + the Android log for checking.
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # to push the results branch
+
+jobs:
+  emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      QT_SERIES: "6.8"
+      NDK_VERSION: 26.1.10909125
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Qt for Android (x86_64, to match the emulator)
+        run: |
+          pip install aqtinstall
+          QT=$(aqt list-qt all_os android --spec "$QT_SERIES" --latest-version)
+          aqt install-qt linux desktop "$QT" linux_gcc_64 -O "$RUNNER_TEMP/Qt"
+          aqt install-qt all_os android "$QT" android_x86_64 -O "$RUNNER_TEMP/Qt"
+          echo "QT_ROOT_DIR=$RUNNER_TEMP/Qt/$QT/android_x86_64" >> "$GITHUB_ENV"
+          echo "HOST_QT=$RUNNER_TEMP/Qt/$QT/gcc_64" >> "$GITHUB_ENV"
+
+      - name: Install Android NDK
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Build debug APK
+        run: |
+          "$QT_ROOT_DIR/bin/qt-cmake" -S . -B build-x86 -DCMAKE_BUILD_TYPE=Debug \
+            -DQT_HOST_PATH="$HOST_QT" \
+            -DANDROID_SDK_ROOT="$ANDROID_SDK_ROOT" \
+            -DANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          cmake --build build-x86 --target apk --parallel
+          cp "$(find build-x86 -name '*debug*.apk' -path '*outputs/apk*' | head -1)" app-debug.apk
+
+      - name: Run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_tablet
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash .github/scripts/emulator-test.sh app-debug.apk emulator-out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-results
+          path: emulator-out
+
+      # Also keep the results on a branch, so they can be read with plain git.
+      - name: Push results to the ci/emulator-results branch
+        if: always()
+        run: |
+          cd emulator-out
+          git init -q -b ci/emulator-results
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "Emulator results for ${{ github.sha }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci/emulator-results

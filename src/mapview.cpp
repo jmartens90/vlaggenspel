@@ -271,7 +271,7 @@ void MapView::paintEvent(QPaintEvent *)
         if (m_tool == DrawLand || m_tool == EraseLand) {
             p.setBrush(m_eraseStroke ? QColor(60, 120, 200, 120) : QColor(232, 220, 181, 150));
             p.setPen(QPen(m_eraseStroke ? QColor(20, 50, 120) : kCoast, w, Qt::DashLine));
-            p.drawPolygon(m_stroke);
+            p.drawPolygon(m_stroke, Qt::WindingFill);
         } else {
             p.setPen(QPen(m_stage == ContinentStage ? kContinentBorder : kCountryBorder,
                           m_stage == ContinentStage ? 4 : 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));

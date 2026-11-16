@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QJsonDocument>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -27,7 +28,9 @@
 #include <QGuiApplication>
 #include <QInputDialog>
 #include <QMenu>
+#include <QSaveFile>
 #include <QSettings>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
@@ -139,12 +142,20 @@ MainWindow::MainWindow(QWidget *parent)
     if (kTouchDevice) {
         // Android can stop the app at any moment once it is in the background: save then.
         connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState st) {
-            if (st != Qt::ApplicationActive)
+            if (st != Qt::ApplicationActive) {
                 autoSave();
+                return;
+            }
+            // Coming back to the front: Android may have thrown away what was on screen.
+            QTimer::singleShot(50, this, [this] { repaintEverything(); });
         });
-        const QString last = QSettings().value("lastWorld").toString();
-        if (!last.isEmpty() && QFile::exists(last))
-            loadFile(last);
+        // Open the last world once the window is on screen. If that file is damaged,
+        // start with an empty world instead of showing an error before anything is visible.
+        QTimer::singleShot(0, this, [this] {
+            const QString last = QSettings().value("lastWorld").toString();
+            if (!last.isEmpty() && QFile::exists(last) && !loadFile(last, true))
+                QSettings().remove("lastWorld");
+        });
     }
 }
 
@@ -726,18 +737,20 @@ void MainWindow::openWorld()
         loadFile(path);
 }
 
-bool MainWindow::loadFile(const QString &path)
+bool MainWindow::loadFile(const QString &path, bool silent)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, tr("Open world"), tr("Could not open %1.").arg(path));
+        if (!silent)
+            QMessageBox::warning(this, tr("Open world"), tr("Could not open %1.").arg(path));
         return false;
     }
     QString error;
     World w;
     const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     if (!World::fromJson(doc.object(), w, &error)) {
-        QMessageBox::warning(this, tr("Open world"), error);
+        if (!silent)
+            QMessageBox::warning(this, tr("Open world"), error);
         return false;
     }
     m_world = w;
@@ -785,14 +798,18 @@ bool MainWindow::saveWorldAs()
     return writeFile(path);
 }
 
-bool MainWindow::writeFile(const QString &path)
+bool MainWindow::writeFile(const QString &path, bool silent)
 {
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        QMessageBox::warning(this, tr("Save world"), tr("Could not write %1.").arg(path));
+    // QSaveFile writes to a temporary file first, so a world is never left half-written
+    // when Android stops the app in the middle of saving.
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)
+        || f.write(QJsonDocument(m_world.toJson()).toJson(QJsonDocument::Compact)) < 0
+        || !f.commit()) {
+        if (!silent)
+            QMessageBox::warning(this, tr("Save world"), tr("Could not write %1.").arg(path));
         return false;
     }
-    f.write(QJsonDocument(m_world.toJson()).toJson(QJsonDocument::Compact));
     m_filePath = path;
     m_modified = false;
     QSettings().setValue("lastWorld", path);
@@ -806,7 +823,8 @@ void MainWindow::autoSave()
 {
     if (!m_modified)
         return;
-    writeFile(m_filePath.isEmpty() ? worldsDir() + "/" + tr("My world") + ".vlag" : m_filePath);
+    // Never show a dialog here: the app may already be in the background.
+    writeFile(m_filePath.isEmpty() ? worldsDir() + "/" + tr("My world") + ".vlag" : m_filePath, true);
 }
 
 void MainWindow::exportPng()
@@ -852,10 +870,37 @@ void MainWindow::resizeEvent(QResizeEvent *e)
     QMainWindow::resizeEvent(e);
     // Phone held upright: put the list under the map instead of next to it.
     if (kTouchDevice && m_dock) {
-        const Qt::DockWidgetArea want = height() > width() ? Qt::BottomDockWidgetArea : Qt::RightDockWidgetArea;
+        const bool upright = height() > width();
+        const Qt::DockWidgetArea want = upright ? Qt::BottomDockWidgetArea : Qt::RightDockWidgetArea;
         if (dockWidgetArea(m_dock) != want)
             addDockWidget(want, m_dock);
+        // Keep the map the biggest thing on screen (on tablets the panel took half the width).
+        if (upright)
+            resizeDocks({ m_dock }, { height() * 2 / 5 }, Qt::Vertical);
+        else
+            resizeDocks({ m_dock }, { qBound(220, width() * 3 / 10, 420) }, Qt::Horizontal);
+        // After turning the screen, Android sometimes keeps old pieces of the picture: redraw all.
+        QTimer::singleShot(100, this, [this] { repaintEverything(); });
     }
+}
+
+// Android's back button: go back one step instead of closing the game.
+void MainWindow::keyPressEvent(QKeyEvent *e)
+{
+    if (e->key() == Qt::Key_Back && m_view->stage() != MapView::LandStage) {
+        setStage(MapView::Stage(int(m_view->stage()) - 1));
+        e->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(e);
+}
+
+void MainWindow::repaintEverything()
+{
+    m_view->worldChanged();
+    for (QWidget *w : QApplication::topLevelWidgets())
+        if (w->isVisible())
+            w->update();
 }
 
 void MainWindow::closeEvent(QCloseEvent *e)
